@@ -34,6 +34,31 @@ function fmtTime(sec) {
   return `${m}:${s}`;
 }
 
+function daysBetween(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr + "T00:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / 86400000);
+}
+
+function computeStudyPlan(examDate, totalQuestions, agg) {
+  const daysLeft = daysBetween(examDate);
+  const weakest = Object.entries(agg)
+    .map(([domain, s]) => ({
+      domain,
+      pct: s.total ? Math.round((s.correct / s.total) * 100) : 0,
+      attempted: s.total,
+    }))
+    .sort((a, b) => a.pct - b.pct);
+
+    const desiredPasses = 2;
+    const totalReps = totalQuestions * desiredPasses;
+    const questionsPerDay = daysLeft && daysLeft > 0 ? Math.ceil(totalReps / daysLeft) : null;
+
+    return { daysLeft, weakest, questionsPerDay, totalQuestions, desiredPasses };
+}
+
 // Map a Supabase `questions` row to the shape the UI uses.
 function mapRow(row) {
   return {
@@ -65,8 +90,12 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState([]);
   const timerRef = useRef(null);
   const deviceId = useMemo(() => getDeviceId(), []);
+  const [targetDomains, setTargetDomains] = useState([]);
+  const [examDate, setExamDate] = useState (() => localStorage.getItem("aplus-exam-date" || ""));
 
   const DOMAINS = useMemo(() => [...new Set(questions.map(q => q.domain))], [questions]);
+
+  const studyPlan = useMemo(() => computeStudyPlan(examDate, questions.length, aggregateDomains()), [examDate, questions, history]);
 
   // Load questions, history, and bookmarks from Supabase on first run
   useEffect(() => {
@@ -107,6 +136,11 @@ export default function App() {
     })();
   }, [deviceId]);
 
+  useEffect(() => {
+    if (examDate) localStorage.setItem("aplus-exam-date", examDate);
+    else localStorage.removeItem("aplus-exam-date");
+  }, [examDate]);
+
   const toggleBookmark = useCallback(async (id) => {
     const isBookmarked = bookmarks.includes(id);
     setBookmarks(prev => isBookmarked ? prev.filter(x => x !== id) : [...prev, id]);
@@ -141,6 +175,7 @@ export default function App() {
   function startQuiz() {
     let pool;
     if (examChoice === "bookmarked") pool = questions.filter(q => bookmarks.includes(q.id));
+    else if (examChoice === "domains") pool = questions.filter(q => targetDomains.includes(q.domain))
     else if (examChoice === "mixed") pool = questions;
     else pool = questions.filter(q => q.exam === examChoice);
 
@@ -251,6 +286,9 @@ export default function App() {
             onStart={startQuiz}
             totalQuestions={questions.length}
             bookmarkCount={bookmarks.length}
+            allDomains={DOMAINS}
+            targetDomains={targetDomains}
+            setTargetDomains={setTargetDomains}
           />
         )}
 
@@ -282,7 +320,14 @@ export default function App() {
         )}
 
         {view === "dashboard" && (
-          <Dashboard history={history} aggregateDomains={aggregateDomains} />
+          <Dashboard 
+            history={history} 
+            aggregateDomains={aggregateDomains}
+            onPracticeDomains={(domain) => {
+              setTargetDomains([domain]);
+              setExamChoice("domains");
+              setView("setup");
+            }} />
         )}
 
         {view === "bookmarks" && (
@@ -291,6 +336,19 @@ export default function App() {
             bookmarks={bookmarks}
             onToggleBookmark={toggleBookmark}
             onPractice={() => { setExamChoice("bookmarked"); setView("setup"); }}
+          />
+        )}
+
+        {view === "plan" && (
+          <StudyPlanScreen
+            examDate={examDate}
+            setExamDate={setExamDate}
+            plan={studyPlan}
+            onPracticeDomain={(domain)=> {
+              setTargetDomains([domain]);
+              setExamChoice("domains");
+              setView("setup");
+            }}
           />
         )}
       </div>
@@ -320,6 +378,7 @@ function Header({ view, setView, bookmarkCount }) {
           <NavButton active={view === "bookmarks"} onClick={() => setView("bookmarks")}>
             Bookmarks{bookmarkCount > 0 ? ` (${bookmarkCount})` : ""}
           </NavButton>
+          <NavButton active={view === "plan"} onClick={() => setView("plan")}>Study plan</NavButton>
         </div>
       )}
     </div>
@@ -342,16 +401,18 @@ function NavButton({ active, onClick, children }) {
 /* ---------------------------------------------------------
    Setup Screen
 --------------------------------------------------------- */
-function SetupScreen({ examChoice, setExamChoice, count, setCount, onStart, totalQuestions, bookmarkCount }) {
+function SetupScreen({ examChoice, setExamChoice, count, setCount, onStart, totalQuestions, bookmarkCount, allDomains, targetDomains, setTargetDomains }) {
   const examOptions = [
     { key: "core1", label: "Core 1", sub: "220-1201 · Hardware, Networking, Mobile" },
     { key: "core2", label: "Core 2", sub: "220-1202 · OS, Security, Software" },
     { key: "mixed", label: "Mixed", sub: "Both exams combined" },
+    { key: "domains", label: "Target domains", sub: targetDomains.length ? `${targetDomains.length} selected` : "Drill specific weak spots" },
   ];
   if (bookmarkCount > 0) {
     examOptions.push({ key: "bookmarked", label: "Bookmarked", sub: `${bookmarkCount} saved question${bookmarkCount === 1 ? "" : "s"}` });
   }
   const countOptions = [10, 20, 45];
+  const startDisabled = examChoice === "domains" && targetDomains.length === 0;
 
   return (
     <div>
@@ -375,6 +436,31 @@ function SetupScreen({ examChoice, setExamChoice, count, setCount, onStart, tota
           ))}
         </div>
       </Panel>
+
+      {examChoice === "domains" && (
+        <Panel style={{ marginTop: 16 }}>
+          <SectionLabel>Choose domains</SectionLabel>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10}}>
+            {allDomains.map(d => {
+              const active = targetDomains.includes(d);
+              return(
+                <button
+                  key={d}
+                  onClick={() => setTargetDomains(prev => active ? prev.filter(x => x !== d) : [...prev, d])}
+                  style={{
+                    padding: "8px 14px", borderRadius: 20, fontSize: 13,
+                    background: active ? T.panel2 : "transparent",
+                    border: `1px solid ${active ? T.amber : T.border}`,
+                    color: active ? T.amber : T.muted,
+                  }}
+                >
+                  {d}
+                </button>
+              )
+            })}
+          </div>
+        </Panel>
+      )}
 
       {examChoice !== "bookmarked" && (
         <Panel style={{ marginTop: 16 }}>
@@ -404,14 +490,120 @@ function SetupScreen({ examChoice, setExamChoice, count, setCount, onStart, tota
 
       <button
         onClick={onStart}
+        disabled={startDisabled}
         style={{
           marginTop: 20, width: "100%", padding: "16px", borderRadius: 8,
           background: T.amber, border: "none", color: "#14181C",
+          color: startDisabled ? T.muted : "#14181c",
           fontWeight: 700, fontSize: 16, letterSpacing: 0.2,
+          opacity: startDisabled ? 0.7 : 1,
         }}
       >
-        {examChoice === "bookmarked" ? "Practice bookmarked questions" : "Start timed quiz"}
+        {examChoice === "bookmarked" ? "Practice bookmarked questions" : examChoice === "domains" ? "Start targeted practice" : "Start timed quiz"}
       </button>
+    </div>
+  );
+}
+
+function StudyPlanScreen({ examDate, setExamDate, plan, onPracticeDomain }) {
+  const { daysLeft, weakest, questionsPerDay, totalQuestions, desiredPasses } = plan;
+  const attempted = weakest.filter(w => w.attempted > 0);
+  const unattempted = weakest.filter(w => w.attempted === 0);
+  const cadenceDays = questionsPerDay ? Math.max(1, Math.round(20 / questionsPerDay)) : null;
+
+  return (
+    <div>
+      <Panel>
+        <SectionLabel>Target exam date</SectionLabel>
+        <input
+          type="date"
+          value={examDate}
+          onChange={e => setExamDate(e.target.value)}
+          style={{
+            marginTop: 10, width: "100%", padding: "12px 14px", borderRadius: 8,
+            background: T.panel2, border: `1px solid ${T.border}`, color: T.text,
+            fontFamily: T.mono, fontSize: 14,
+          }}
+        />
+      </Panel>
+
+      {!examDate && (
+        <Panel style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 13.5, color: T.muted }}>
+            Set a date above to get a personalized pace.
+          </div>
+        </Panel>
+      )}
+
+      {examDate && daysLeft !== null && (
+        <>
+          <Panel style={{ marginTop: 16, textAlign: "center", padding: "24px 20px" }}>
+            <div style={{ fontFamily: T.mono, fontSize: 12, color: T.muted }}>
+              {daysLeft >= 0 ? "DAYS UNTIL EXAM" : "DAYS PAST TARGET DATE"}
+            </div>
+            <div style={{ fontFamily: T.mono, fontSize: 44, fontWeight: 700, color: daysLeft < 7 ? T.red : T.teal, marginTop: 6 }}>
+              {Math.abs(daysLeft)}
+            </div>
+          </Panel>
+
+          {daysLeft > 0 ? (
+            <Panel style={{ marginTop: 16 }}>
+              <SectionLabel>Suggested pace</SectionLabel>
+              <div style={{ fontSize: 14.5, lineHeight: 1.6, marginTop: 8 }}>
+                To work through the {totalQuestions}-question bank {desiredPasses}× before your exam, aim for{" "}
+                <span style={{ color: T.amber, fontWeight: 700, fontFamily: T.mono }}>
+                  ~{questionsPerDay} question{questionsPerDay === 1 ? "" : "s"}/day
+                </span>
+                {cadenceDays ? ` — roughly one 20-question quiz every ${cadenceDays} day${cadenceDays === 1 ? "" : "s"}.` : "."}
+              </div>
+              <div style={{ fontSize: 12.5, color: T.muted, marginTop: 10 }}>
+                This tracks volume, not difficulty — weight your actual time toward the weak domains below.
+              </div>
+            </Panel>
+          ) : (
+            <Panel style={{ marginTop: 16, borderColor: T.red }}>
+              <div style={{ fontSize: 14, color: T.red }}>
+                Target date has passed — update it above, or keep drilling weak areas below.
+              </div>
+            </Panel>
+          )}
+        </>
+      )}
+
+      {attempted.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <SectionLabel>Priority order (weakest first)</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+            {attempted.map(w => (
+              <Panel key={w.domain} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+                <div>
+                  <div style={{ fontSize: 14 }}>{w.domain}</div>
+                  <div style={{ fontSize: 12, color: T.muted, fontFamily: T.mono, marginTop: 2 }}>{w.pct}% correct so far</div>
+                </div>
+                <button onClick={() => onPracticeDomain(w.domain)} style={{ padding: "8px 14px", borderRadius: 6, background: "transparent", border: `1px solid ${T.teal}`, color: T.teal, fontSize: 13 }}>
+                  Practice
+                </button>
+              </Panel>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {unattempted.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <SectionLabel>Not yet attempted</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+            {unattempted.map(w => (
+              <Panel key={w.domain} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+                <div style={{ fontSize: 14 }}>{w.domain}</div>
+                <button onClick={() => onPracticeDomain(w.domain)} style={{ padding: "8px 14px", borderRadius: 6, background: "transparent", border: `1px solid ${T.border}`, color: T.muted, fontSize: 13 }}>
+                  Start
+                </button>
+              </Panel>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -707,6 +899,9 @@ function Dashboard({ history, aggregateDomains }) {
           <div style={{ fontSize: 13.5, color: T.muted }}>
             {rows[0].domain} is your weakest area at {rows[0].pct}%. Consider a focused review before your next full quiz.
           </div>
+          <button onClick={() => onPracticeDomain(rows[0].domain)} style={{ paddingn: "8px 14px", borderRadius: 6, background: "transparent", border: `1px solid ${T.amber}`, color: T.amber, fontSize: 13 }}>
+            Practice this domain
+          </button>
         </Panel>
       )}
     </div>
