@@ -368,7 +368,7 @@ function Header({ view, setView, bookmarkCount }) {
           <div style={{ fontFamily: T.mono, fontSize: 12, color: T.amber, letterSpacing: 1, marginBottom: 4 }}>
             A+ 220-1201 / 220-1202
           </div>
-          <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>Diagnostic Bench</div>
+          <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>CompTIA A+ PREP</div>
         </div>
       </div>
       {navVisible && (
