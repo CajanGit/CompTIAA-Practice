@@ -1,6 +1,6 @@
 {
-  "name": "Diagnostic Bench — A+ Study",
-  "short_name": "A+ Bench",
+  "name": "CompTIA A+ study tool",
+  "short_name": "A+ Prep",
   "description": "Timed practice quizzes for the CompTIA A+ Core 1 & Core 2 exams.",
   "start_url": "/",
   "display": "standalone",
