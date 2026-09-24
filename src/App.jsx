@@ -28,6 +28,25 @@ function shuffle(arr) {
   return a;
 }
 
+// Add below the existing shuffle() helper
+// Options whose meaning depends on where they sit in the list
+const POSITIONAL_OPTION =
+  /\b(all|none|both|neither) of the (above|these)\b|\b(above|these) (options|answers)\b|\b[A-D] (and|&) [A-D]\b/;
+// The letter pattern is case-sensitive on purpose, so ordinary prose like "a and b" doesn't match
+
+function shuffleQuestion(q) {
+  // Skip questions like "All of the above" or "Both A and B"
+  if (q.options.some(opt => POSITIONAL_OPTION.test(opt))) return q;
+
+  const tagged = q.options.map((text, i) => ({ text, isCorrect: i === q.correct }));
+  const shuffled = shuffle(tagged);
+  return {
+    ...q,
+    options: shuffled.map(o => o.text),
+    correct: shuffled.findIndex(o => o.isCorrect),
+  };
+}
+
 function fmtTime(sec) {
   const m = Math.floor(sec / 60).toString().padStart(2, "0");
   const s = Math.floor(sec % 60).toString().padStart(2, "0");
@@ -181,7 +200,7 @@ export default function App() {
 
     if (pool.length === 0) return;
     const n = Math.min(count, pool.length);
-    const picked = shuffle(pool).slice(0, n);
+    const picked = shuffle(pool).slice(0, n).map(shuffleQuestion);
     const secs = n * 60;
     setQuizQuestions(picked);
     setAnswers({});
